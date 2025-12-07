@@ -8,6 +8,9 @@ from PIL import Image, ImageFilter, ImageDraw
 RGB = Tuple[int, int, int]
 
 
+# ---------------------------------------------------------
+# 基础工具
+# ---------------------------------------------------------
 def _lerp_color(c1: RGB, c2: RGB, t: float) -> RGB:
     return (
         int(c1[0] * (1 - t) + c2[0] * t),
@@ -23,6 +26,7 @@ def _to_image_bytes(img: Image.Image) -> bytes:
 
 
 def _normalize_palette(palette) -> List[RGB]:
+    """把各种 palette 格式统一为 [(r,g,b), ...]"""
     if isinstance(palette, np.ndarray):
         palette = palette.tolist()
 
@@ -49,7 +53,9 @@ def _normalize_palette(palette) -> List[RGB]:
     return norm
 
 
-# ---------------- 基础渐变背景 ----------------
+# ---------------------------------------------------------
+# 基础渐变背景
+# ---------------------------------------------------------
 def _generate_base_gradient(size: int, palette, mood_intensity: float) -> Image.Image:
     palette = _normalize_palette(palette)
 
@@ -77,11 +83,13 @@ def _generate_base_gradient(size: int, palette, mood_intensity: float) -> Image.
             arr[y, x, :] = c_final
 
     img = Image.fromarray(arr, mode="RGB")
-    img = img.filter(ImageFilter.GaussianBlur(radius=2.0))
+    img = img.filter(ImageFilter.GaussianBlur(radius=1.8))
     return img
 
 
-# ---------------- Mist 柔雾 ----------------
+# ---------------------------------------------------------
+# Mist 柔雾
+# ---------------------------------------------------------
 def _apply_mist_layer(img: Image.Image, strength: float, smoothness: float, glow: float) -> Image.Image:
     if strength <= 0 and glow <= 0:
         return img
@@ -91,33 +99,36 @@ def _apply_mist_layer(img: Image.Image, strength: float, smoothness: float, glow
 
     if strength > 0:
         noise = np.random.rand(h, w).astype("float32")
-        mist_radius = 20 + smoothness * 40
+        mist_radius = 15 + smoothness * 25
         mist_layer = Image.fromarray((noise * 255).astype("uint8"), mode="L")
         mist_layer = mist_layer.filter(ImageFilter.GaussianBlur(radius=mist_radius))
 
         mist_rgb = Image.merge("RGB", (mist_layer, mist_layer, mist_layer))
-        white = Image.new("RGB", (w, h), (245, 245, 250))
-        mist_rgb = Image.blend(white, mist_rgb, alpha=0.5)
+        # 不再用死白，稍微带点冷蓝
+        white = Image.new("RGB", (w, h), (235, 238, 247))
+        mist_rgb = Image.blend(white, mist_rgb, alpha=0.4)
 
-        alpha = 0.25 + strength * 0.5
-        base = Image.blend(base, mist_rgb, alpha=min(alpha, 0.95))
+        alpha = 0.15 + strength * 0.35  # 比原来小一截，避免洗白
+        base = Image.blend(base, mist_rgb, alpha=min(alpha, 0.7))
 
     if glow > 0:
-        glow_radius = 8 + glow * 25
+        glow_radius = 6 + glow * 20
         glow_layer = base.filter(ImageFilter.GaussianBlur(radius=glow_radius))
-        glow_layer = Image.blend(base, glow_layer, alpha=0.6)
+        glow_layer = Image.blend(base, glow_layer, alpha=0.55)
 
         enhancer = np.array(glow_layer).astype("float32")
-        enhancer = enhancer * (1.05 + glow * 0.3)
+        enhancer = enhancer * (1.03 + glow * 0.25)
         enhancer = np.clip(enhancer, 0, 255).astype("uint8")
         glow_layer = Image.fromarray(enhancer, mode="RGB")
 
-        base = Image.blend(base, glow_layer, alpha=0.6)
+        base = Image.blend(base, glow_layer, alpha=0.55)
 
     return base
 
 
-# ---------------- Watercolor 水彩 ----------------
+# ---------------------------------------------------------
+# Watercolor 水彩扩散
+# ---------------------------------------------------------
 def _apply_watercolor_layer(img: Image.Image, palette, spread: float, layers: int, saturation: float) -> Image.Image:
     if spread <= 0 or layers <= 0:
         return img
@@ -130,61 +141,100 @@ def _apply_watercolor_layer(img: Image.Image, palette, spread: float, layers: in
         overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        n_blobs = int(20 + spread * 40)
+        n_blobs = int(15 + spread * 35)
         for _ in range(n_blobs):
             color = random.choice(palette)
             r, g, b = color
-            r = int(r + (255 - r) * (0.6 * (1 - saturation)))
-            g = int(g + (255 - g) * (0.6 * (1 - saturation)))
-            b = int(b + (255 - b) * (0.6 * (1 - saturation)))
+            # 稍微柔化，但保留颜色
+            r = int(r + (255 - r) * (0.4 * (1 - saturation)))
+            g = int(g + (255 - g) * (0.4 * (1 - saturation)))
+            b = int(b + (255 - b) * (0.4 * (1 - saturation)))
 
             cx = random.randint(0, w)
             cy = random.randint(0, h)
-            max_radius = int(min(w, h) * (0.25 + spread * 0.4))
-            rx = random.randint(int(max_radius * 0.2), max_radius)
-            ry = random.randint(int(max_radius * 0.2), max_radius)
+            max_radius = int(min(w, h) * (0.22 + spread * 0.35))
+            rx = random.randint(int(max_radius * 0.25), max_radius)
+            ry = random.randint(int(max_radius * 0.25), max_radius)
 
-            alpha = int(60 + 120 * random.random())
+            alpha = int(70 + 110 * random.random())
             bbox = (cx - rx, cy - ry, cx + rx, cy + ry)
             draw.ellipse(bbox, fill=(r, g, b, alpha))
 
-        blur_radius = 10 + spread * 40
+        blur_radius = 8 + spread * 30
         overlay = overlay.filter(ImageFilter.GaussianBlur(radius=blur_radius))
         base = Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
     return base
 
 
-# ---------------- Pastel 粉彩 ----------------
+# ---------------------------------------------------------
+# Pastel 粉彩柔化
+# ---------------------------------------------------------
 def _apply_pastel_layer(img: Image.Image, softness: float, grain_amount: float, blend_ratio: float) -> Image.Image:
     base = img.convert("RGB")
     w, h = base.size
 
     if softness > 0:
-        blur_radius = 2 + softness * 8
+        blur_radius = 1.5 + softness * 6
         soft = base.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     else:
         soft = base
 
     arr = np.array(soft).astype("float32")
-    arr *= 1.05
+    arr *= 1.04
     arr = np.clip(arr, 0, 255).astype("uint8")
     soft = Image.fromarray(arr, mode="RGB")
 
     if grain_amount > 0:
-        noise = np.random.normal(0, grain_amount * 15, (h, w, 1)).astype("float32")
+        noise = np.random.normal(0, grain_amount * 12, (h, w, 1)).astype("float32")
         arr = np.array(soft).astype("float32")
         arr = arr + noise
         arr = np.clip(arr, 0, 255).astype("uint8")
         soft = Image.fromarray(arr, mode="RGB")
 
     overlay = Image.new("RGB", (w, h), (245, 245, 248))
-    pastel = Image.blend(soft, overlay, alpha=0.25)
+    # 粉彩叠加比例降低一点
+    pastel = Image.blend(soft, overlay, alpha=0.18)
 
-    return Image.blend(base, pastel, alpha=blend_ratio)
+    return Image.blend(base, pastel, alpha=blend_ratio * 0.8)
 
 
-# ---------------- 城市风格检测 ----------------
+# ---------------------------------------------------------
+# 城市 accent palette（让不同城市有固定“味道”）
+# ---------------------------------------------------------
+def _city_accent_palette(city: str, base_palette: List[RGB]) -> List[RGB]:
+    name = city.lower()
+    # 默认用原 palette
+    accents = _normalize_palette(base_palette)
+
+    def hex_list(lst):
+        res = []
+        for hx in lst:
+            hx = hx.lstrip("#")
+            r = int(hx[0:2], 16)
+            g = int(hx[2:4], 16)
+            b = int(hx[4:6], 16)
+            res.append((r, g, b))
+        return res
+
+    if any(k in name for k in ["seoul", "hongdae", "gangnam"]):
+        # 粉紫 + 蓝色霓虹
+        accents = hex_list(["#FF9AE5", "#A6C8FF", "#6B7CFF"])
+    elif any(k in name for k in ["tokyo", "shibuya", "akihabara"]):
+        accents = hex_list(["#8AF1FF", "#B388FF", "#2D0CFF"])
+    elif "paris" in name or "seine" in name:
+        accents = hex_list(["#FFD9A0", "#FFC4D6", "#FFF2C7"])
+    elif any(k in name for k in ["busan", "jeju"]):
+        accents = hex_list(["#A5E8FF", "#87C6C9", "#5FA4A8"])
+    elif any(k in name for k in ["new york", "nyc", "manhattan"]):
+        accents = hex_list(["#FF4F81", "#FFC857", "#1A1D4A"])
+
+    return accents
+
+
+# ---------------------------------------------------------
+# 城市标签检测
+# ---------------------------------------------------------
 def _detect_city_tags(city: str, memory_text: str) -> List[str]:
     text = (city + " " + memory_text).lower()
     tags = []
@@ -216,34 +266,45 @@ def _detect_city_tags(city: str, memory_text: str) -> List[str]:
         tags.append("peaks")
 
     if not tags:
-        # 没匹配到明确城市风格时，给一个通用“波浪 + 雾”
         tags = ["waves"]
 
     return tags
 
 
-# ---------------- 城市风格叠加 ----------------
-def _apply_city_style_layer(img: Image.Image, palette, tags: List[str], strength: float) -> Image.Image:
-    palette = _normalize_palette(palette)
+# ---------------------------------------------------------
+# 城市风格叠加层
+# ---------------------------------------------------------
+def _apply_city_style_layer(img: Image.Image, city: str, palette, tags: List[str], strength: float) -> Image.Image:
+    # 使用城市 accent palette，使霓虹/像素色更明显
+    palette = _city_accent_palette(city, palette)
     w, h = img.size
     base = img.convert("RGB")
 
     overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    def pick_color():
-        return random.choice(palette)
+    def pick_color(vivid: bool = False):
+        c = random.choice(palette)
+        if vivid:
+            # 提高饱和度和亮度
+            r, g, b = c
+            arr = np.array([[ [r, g, b] ]], dtype="float32")
+            arr *= 1.15
+            arr = np.clip(arr, 0, 255).astype("uint8")
+            r, g, b = arr[0, 0]
+            return (int(r), int(g), int(b))
+        return c
 
     # waves
     if "waves" in tags:
         n = 4
         for i in range(n):
             color = pick_color()
-            alpha = int(40 + 80 * strength)
-            thickness = int(10 + 40 * strength)
+            alpha = int(45 + 80 * strength)
+            thickness = int(8 + 35 * strength)
             y0 = int(h * (0.3 + 0.4 * i / n))
-            for x in range(0, w, 8):
-                y = y0 + int(np.sin(x / 40.0 + i) * 15)
+            for x in range(0, w, 6):
+                y = y0 + int(np.sin(x / 40.0 + i) * 18)
                 draw.line(
                     [(x, y), (x + 10, y)],
                     fill=(color[0], color[1], color[2], alpha),
@@ -252,14 +313,14 @@ def _apply_city_style_layer(img: Image.Image, palette, tags: List[str], strength
 
     # vertical neon
     if "vertical_neon" in tags:
-        n_lines = int(6 + 10 * strength)
+        n_lines = int(8 + 12 * strength)
         for _ in range(n_lines):
-            color = pick_color()
-            alpha = int(60 + 120 * strength)
+            color = pick_color(vivid=True)
+            alpha = int(120 + 120 * strength)
             x = random.randint(0, w)
-            top = random.randint(0, int(h * 0.3))
+            top = random.randint(0, int(h * 0.1))
             bottom = random.randint(int(h * 0.6), h)
-            width = random.randint(6, 18)
+            width = random.randint(6, 16)
             draw.rectangle(
                 (x, top, x + width, bottom),
                 fill=(color[0], color[1], color[2], alpha),
@@ -267,12 +328,12 @@ def _apply_city_style_layer(img: Image.Image, palette, tags: List[str], strength
 
     # pixel grid
     if "pixel_grid" in tags:
-        cell = int(16 - 8 * strength) if strength > 0 else 16
+        cell = int(18 - 10 * strength) if strength > 0 else 18
         for y in range(0, h, cell):
             for x in range(0, w, cell):
-                if random.random() < 0.25 + 0.35 * strength:
-                    color = pick_color()
-                    alpha = int(40 + 80 * strength)
+                if random.random() < 0.23 + 0.35 * strength:
+                    color = pick_color(vivid=True)
+                    alpha = int(80 + 120 * strength)
                     draw.rectangle(
                         (x, y, x + cell, y + cell),
                         fill=(color[0], color[1], color[2], alpha),
@@ -281,17 +342,16 @@ def _apply_city_style_layer(img: Image.Image, palette, tags: List[str], strength
     # arches
     if "arches" in tags:
         n_arch = int(3 + 4 * strength)
-        base_y = int(h * 0.75)
+        base_y = int(h * 0.78)
         for i in range(n_arch):
             color = pick_color()
-            alpha = int(50 + 100 * strength)
-            width = int(w * 0.15)
-            gap = int(w * 0.05)
-            x_center = int(w * 0.2 + i * (width + gap))
+            alpha = int(70 + 100 * strength)
+            width = int(w * 0.16)
+            gap = int(w * 0.04)
+            x_center = int(w * 0.18 + i * (width + gap))
             left = x_center - width // 2
             right = x_center + width // 2
-            top = int(h * (0.4 + 0.1 * random.random()))
-            # 矩形+半圆
+            top = int(h * (0.38 + 0.1 * random.random()))
             draw.rectangle(
                 (left, (top + base_y) // 2, right, base_y),
                 fill=(color[0], color[1], color[2], alpha),
@@ -303,14 +363,14 @@ def _apply_city_style_layer(img: Image.Image, palette, tags: List[str], strength
 
     # chaos lines
     if "chaos_lines" in tags:
-        n = int(30 + 40 * strength)
+        n = int(35 + 45 * strength)
         for _ in range(n):
-            color = pick_color()
-            alpha = int(30 + 120 * strength)
+            color = pick_color(vivid=True)
+            alpha = int(60 + 150 * strength)
             x1 = random.randint(0, w)
             y1 = random.randint(0, h)
-            x2 = x1 + random.randint(-100, 100)
-            y2 = y1 + random.randint(-80, 80)
+            x2 = x1 + random.randint(-110, 110)
+            y2 = y1 + random.randint(-90, 90)
             draw.line(
                 (x1, y1, x2, y2),
                 fill=(color[0], color[1], color[2], alpha),
@@ -319,19 +379,20 @@ def _apply_city_style_layer(img: Image.Image, palette, tags: List[str], strength
 
     # fog overlay
     if "fog_overlay" in tags:
-        fog = Image.new("L", (w, h), 0)
         fog_noise = np.random.rand(h, w).astype("float32")
         fog = Image.fromarray((fog_noise * 255).astype("uint8"), mode="L")
-        fog = fog.filter(ImageFilter.GaussianBlur(radius=40))
+        fog = fog.filter(ImageFilter.GaussianBlur(radius=35))
         fog_rgb = Image.merge("RGBA", (fog, fog, fog, fog))
         overlay = Image.alpha_composite(overlay, fog_rgb)
 
-    overlay = overlay.filter(ImageFilter.GaussianBlur(radius=4))
+    overlay = overlay.filter(ImageFilter.GaussianBlur(radius=3.0))
     result = Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
     return result
 
 
-# ---------------- 总入口：生成海报 ----------------
+# ---------------------------------------------------------
+# 总入口：生成海报
+# ---------------------------------------------------------
 def generate_poster(
     city: str,
     memory_text: str,
@@ -365,13 +426,13 @@ def generate_poster(
     random.seed(seed_int)
 
     # 情绪连动：用 emotion_link 和 mood_intensity 调整各层强度
-    factor = 0.3 + 0.7 * emotion_link
+    factor = 0.35 + 0.65 * emotion_link
     mist_strength *= factor * (0.7 + 0.6 * mood_intensity)
     wc_spread *= factor * (0.6 + 0.7 * mood_intensity)
-    wc_layers = max(1, int(wc_layers * (0.5 + 0.8 * mood_intensity)))
+    wc_layers = max(1, int(wc_layers * (0.6 + 0.8 * mood_intensity)))
     pastel_softness *= factor * (0.5 + 0.8 * mood_intensity)
     pastel_grain *= factor
-    pastel_blend *= 0.7 + 0.3 * emotion_link
+    pastel_blend *= 0.6 + 0.3 * emotion_link
 
     size = 1024
     base = _generate_base_gradient(size=size, palette=palette, mood_intensity=mood_intensity)
@@ -400,7 +461,7 @@ def generate_poster(
 
     # 城市风格层
     tags = _detect_city_tags(city, memory_text)
-    city_strength = 0.4 + 0.6 * emotion_link
-    base = _apply_city_style_layer(base, palette, tags, city_strength)
+    city_strength = 0.45 + 0.55 * emotion_link
+    base = _apply_city_style_layer(base, city, palette, tags, city_strength)
 
     return _to_image_bytes(base)
