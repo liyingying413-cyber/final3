@@ -49,8 +49,7 @@ def analyze_with_openai(city: str, memory: str):
         print("OpenAI error:", e)
         return None
 
-    # 把 Stable Diffusion 的 key 也塞进去，方便后面使用
-    data["stability_key"] = os.getenv("STABILITY_API_KEY")
+    # 这里不再把 STABILITY_API_KEY 放进 JSON 里
     return data
 
 
@@ -90,5 +89,4 @@ def local_analyze(city: str, memory: str):
         "palette": palette,
         "style_mode": style_mode,
         "typography_focus": "balanced",
-        "stability_key": os.getenv("STABILITY_API_KEY"),
     }
