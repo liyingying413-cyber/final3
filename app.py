@@ -1,132 +1,116 @@
 import streamlit as st
-from utils import analyze_with_openai, local_analyze
-from poster_generator import generate_poster_with_stable_diffusion
+import numpy as np
+from utils import analyze_memory_local, generate_palette
+from poster_generator import generate_poster
 
-# -------------------------
-# 页面标题 / 布局
-# -------------------------
-st.set_page_config(page_title="City × Memory × Emotion — AI Poster", layout="wide")
-
-st.title("✨ City × Memory × Emotion — AI Poster Generator")
-
-st.markdown(
-    """
-    输入城市名和记忆文本，AI 会分析其中的情绪、颜色、意象，并自动生成唯美渐变风格的小红书风海报。
-    左侧可调节艺术风格参数（形状、模糊、柔和度、色彩等），获得更高自由度与更具风格化的艺术呈现。
-    """
+# ----------------------------
+# 页面配置
+# ----------------------------
+st.set_page_config(
+    page_title="City × Memory × Emotion — AI Poster Generator",
+    layout="wide"
 )
 
-# -------------------------
-# Layout: 左侧 Sidebar 控件
-# -------------------------
-with st.sidebar:
-    st.header("🟣 形状 Shapes（液态 / 云雾感）")
+st.title("🌆 City × Memory × Emotion — Art Poster Generator")
 
-    blob_count = st.slider("形状数量 Blob Count", 5, 80, 25)
-    blob_size = st.slider("形状大小 Blob Size", 20, 120, 80)
-    edge_softness = st.slider("边缘柔和度 Edge Softness", 0.0, 1.0, 0.8)
+# ----------------------------
+# 折叠说明区（像你的参考图）
+# ----------------------------
+with st.expander("📘 About This App（点击展开）"):
+    st.markdown("""
+本应用将 **城市 × 记忆 × 情绪** 转换为独特的生成艺术海报。
 
-    st.header("💓 情绪影响 Emotion Influence")
-    mood_influence = st.slider("情绪对画面的影响 Mood Influence", 0.0, 1.0, 0.5)
+通过三种风格叠加算法：  
+- **Mist（柔雾）**：朦胧、柔和、氛围感强  
+- **Watercolor（水彩扩散）**：有机纹理、自然晕染  
+- **Pastel（粉彩）**：柔化画面、呈现温暖的插画质感  
 
-    st.header("🎨 Style Parameters 风格参数")
-    style_mode_user = st.selectbox(
-        "风格模式 Style Mode",
-        [
-            "Pastel Mist",
-            "Dreamy Film",
-            "Magazine Clean",
-            "Glow Bloom",
-            "Hazy Fade",
-        ],
-    )
+整个流程不依赖任何 API，全部在本地计算，可免费无限制使用。  
+你可以自由调节左侧的各项参数来设计属于自己的海报风格。
+    """)
 
-    pastel_intensity = st.slider("柔和度 Pastel Intensity", 0.0, 1.0, 0.7)
-    desaturation = st.slider("饱和度降低 Desaturation", 0.0, 1.0, 0.3)
-    dreamy_blur = st.slider("景深模糊 Dreamy Blur", 0, 30, 12)
-    bloom = st.slider("高光扩散 Bloom", 0.0, 1.0, 0.4)
-    grain = st.slider("胶片颗粒 Grain", 0.0, 1.0, 0.15)
-    vignette = st.slider("暗角强度 Vignette", 0.0, 1.0, 0.2)
-    whitespace = st.slider("留白比例 Whitespace", 0.0, 0.5, 0.25)
+st.write("---")
 
-    st.header("🎲 随机种子 Seed")
-    seed = st.number_input("随机种子（相同 seed 会生成相似风格海报）", value=42, step=1)
+# ----------------------------
+# 输入区
+# ----------------------------
+st.subheader("Step 1 — 输入你的城市与记忆文本")
 
-    st.write("---")
-    submit_btn = st.button("✨ 生成海报 Generate Poster")
+city = st.text_input("城市名称（City）", placeholder="例如：Seoul / Nanjing / Tokyo ...")
+memory_text = st.text_area("写下你和这个城市的记忆：", height=180)
 
-# 将控件封装为字典传给生成器
-style_controls = {
-    "blob_count": blob_count,
-    "blob_size": blob_size,
-    "edge_softness": edge_softness,
-    "mood_influence": mood_influence,
-    "style_mode_user": style_mode_user,
-    "pastel_intensity": pastel_intensity,
-    "desaturation": desaturation,
-    "dreamy_blur": dreamy_blur,
-    "bloom": bloom,
-    "grain": grain,
-    "vignette": vignette,
-    "whitespace": whitespace,
-}
+seed = st.number_input("随机种子（相同 seed 会生成相似风格）", value=42, step=1)
 
-# -------------------------
-# Step 1 — 用户输入
-# -------------------------
-st.subheader("Step 1 — 输入你的城市记忆")
+st.write("---")
 
-city = st.text_input("城市名（City）", placeholder="如：Seoul / Tokyo / Paris …")
-memory = st.text_area("写下你和这座城市的记忆：", height=200)
 
-# -------------------------
-# Step 2 — AI 分析
-# -------------------------
-if submit_btn:
-    if not city.strip() or not memory.strip():
-        st.error("❗ 城市名与记忆内容不能为空。")
+# 🎛️ 左侧控件
+st.sidebar.header("🌫 Mist（柔雾风格）")
+mist_strength = st.sidebar.slider("Mist Strength（雾化强度）", 0.0, 1.2, 0.6)
+mist_smoothness = st.sidebar.slider("Gradient Smoothness（渐变柔化）", 0.0, 1.0, 0.7)
+mist_glow = st.sidebar.slider("Glow Radius（光晕半径）", 0.0, 1.0, 0.4)
+
+st.sidebar.header("🎨 Watercolor（水彩扩散）")
+wc_spread = st.sidebar.slider("Spread Radius（水彩扩散半径）", 0.0, 1.0, 0.45)
+wc_layers = st.sidebar.slider("Layer Count（水彩层数）", 1, 5, 2)
+wc_saturation = st.sidebar.slider("Ink Saturation（色彩墨量）", 0.0, 1.0, 0.6)
+
+st.sidebar.header("🩶 Pastel（粉彩柔化）")
+pastel_softness = st.sidebar.slider("Softness（柔和度）", 0.0, 1.0, 0.5)
+pastel_grain = st.sidebar.slider("Grain Amount（颗粒）", 0.0, 1.0, 0.25)
+pastel_blend = st.sidebar.slider("Blend Ratio（混合比例）", 0.0, 1.0, 0.6)
+
+st.sidebar.write("----")
+
+generate_btn = st.sidebar.button("🎨 生成海报 Generate Poster")
+
+
+# ----------------------------
+# Step 2：本地分析情绪 + 颜色
+# ----------------------------
+st.subheader("Step 2 — AI 分析结果（可写入报告）")
+
+if generate_btn:
+    if not city.strip() or not memory_text.strip():
+        st.error("城市和记忆文本不能为空！")
         st.stop()
 
-    # 调用 OpenAI
-    with st.spinner("Step 1 — 使用 OpenAI AI 分析文本风格…"):
-        analysis = analyze_with_openai(city, memory)
-
-    if analysis is None:
-        st.warning("⚠ OpenAI 调用失败，改用本地 fallback 分析。")
-        analysis = local_analyze(city, memory)
-
-    st.subheader("Step 2 — AI 分析结果（可写入报告）")
+    analysis = analyze_memory_local(city, memory_text)
     st.json(analysis)
 
-    # -------------------------
-    # Step 3 — Stable Diffusion 生成海报
-    # -------------------------
-    st.subheader("Step 3 — 使用 Stable Diffusion 生成海报")
+    st.write("---")
 
-    with st.spinner("Stable Diffusion 正在生成小红书风格海报…"):
-        img, err_msg = generate_poster_with_stable_diffusion(
-            analysis=analysis,
-            controls=style_controls,
-            seed=int(seed),
+    # ----------------------------
+    # Step 3：本地生成海报
+    # ----------------------------
+    st.subheader("Step 3 — 本地生成艺术海报（无需 API，免费）")
+
+    with st.spinner("正在生成海报，请稍候..."):
+
+        poster = generate_poster(
+            palette=analysis["palette"],
+            mood_intensity=analysis["intensity"],
+            seed=seed,
+
+            # A+C+E 风格参数传入生成器
+            mist_strength=mist_strength,
+            mist_smoothness=mist_smoothness,
+            mist_glow=mist_glow,
+
+            wc_spread=wc_spread,
+            wc_layers=wc_layers,
+            wc_saturation=wc_saturation,
+
+            pastel_softness=pastel_softness,
+            pastel_grain=pastel_grain,
+            pastel_blend=pastel_blend,
         )
 
-    if img is None:
-        st.error(f"❌ Stable Diffusion 生成失败：{err_msg}")
-        st.stop()
+        st.image(poster, caption="🎨 海报生成结果", use_column_width=True)
 
-    # -------------------------
-    # Step 4 — 海报预览 + 下载
-    # -------------------------
-    st.subheader("Step 4 — 海报预览 Preview")
-    st.image(img, use_column_width=True)
-
-    import io
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-
-    st.download_button(
-        "⬇ 下载 PNG 海报",
-        data=buf.getvalue(),
-        file_name="city_memory_poster.png",
-        mime="image/png",
-    )
+        st.download_button(
+            "📥 下载 PNG 文件",
+            data=poster,
+            file_name=f"{city}_art_poster.png",
+            mime="image/png"
+        )
