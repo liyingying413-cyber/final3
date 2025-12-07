@@ -1,107 +1,120 @@
-import numpy as np
-import colorsys
+import streamlit as st
+from utils import analyze_memory_local
+from poster_generator import generate_poster
 
+st.set_page_config(
+    page_title="City × Memory × Emotion — Art Poster Generator",
+    layout="wide"
+)
 
-def generate_palette(mood: str, intensity: float):
-    """
-    根据情绪和强度生成一组 3～5 个颜色的柔和色板。
-    输出为 [(r,g,b), ...]，值在 0–255。
-    """
+st.title("🌆 City × Memory × Emotion — Art Poster Generator")
 
-    # 各情绪对应基础 HSV
-    mood_to_hsv = {
-        "calm":      (200 / 360, 0.25, 0.95),  # 蓝绿
-        "nostalgic": (35  / 360, 0.35, 0.96),  # 暖橙黄
-        "dreamy":    (260 / 360, 0.30, 0.98),  # 紫蓝
-        "sad":       (210 / 360, 0.22, 0.90),  # 暗蓝
-        "happy":     (50  / 360, 0.45, 0.99),  # 明亮黄
-        "romantic":  (330 / 360, 0.35, 0.97),  # 粉紫
-        "tense":     (350 / 360, 0.60, 0.92),  # 偏红
-    }
+# 说明折叠块
+with st.expander("📘 About This App（点击展开）", expanded=True):
+    st.markdown("""
+本应用将 **城市 × 记忆 × 情绪** 转换为抽象艺术海报。
 
-    base_h, base_s, base_v = mood_to_hsv.get(mood, mood_to_hsv["calm"])
-    colors = []
-    num_colors = np.random.randint(3, 6)
+特点：
 
-    for _ in range(num_colors):
-        # 增大扰动范围，让差异更明显
-        h = (base_h + np.random.uniform(-0.12, 0.12)) % 1.0
-        s = np.clip(base_s + np.random.uniform(-0.25, 0.2), 0.05, 0.95)
-        v = np.clip(base_v + np.random.uniform(-0.2, 0.2), 0.4, 1.0)
+- 不依赖任何 API，全程本地生成（完全免费、可在 Streamlit Cloud 运行）。
+- 结合三种风格：
+  - **Mist（柔雾）**：朦胧、梦幻的氛围。
+  - **Watercolor（水彩扩散）**：有机流动纹理。
+  - **Pastel（粉彩）**：柔和颗粒与插画质感。
+- 根据你的 **城市名称** 与 **记忆文本**，分析情绪并映射到色彩与构图风格。
 
-        # 情绪强度越高，色彩对比越强 / 稍微偏暗一点
-        v *= (0.9 - 0.3 * intensity)
+你可以在左侧调节各项参数，探索不同的情绪化视觉表达。
+    """)
 
-        r, g, b = colorsys.hsv_to_rgb(h, s, v)
-        colors.append((int(r * 255), int(g * 255), int(b * 255)))
+st.write("---")
 
-    return colors
+# ----------------------------
+# 输入区
+# ----------------------------
+st.subheader("Step 1 — 输入你的城市与记忆文本")
 
+city = st.text_input("城市名称（City）", placeholder="例如：Seoul / Nanjing / Tokyo ...")
+memory_text = st.text_area("写下你和这个城市的记忆：", height=180)
 
-def analyze_memory_local(city: str, memory: str):
-    """
-    本地情绪分析（不依赖任何 API）。
-    通过关键词 + 标点 + 文本长度，估计情绪标签与强度。
-    """
+st.write("---")
 
-    text = (city + " " + memory).lower()
+# 🎛️ 左侧控件
+st.sidebar.header("🌫 Mist（柔雾风格）")
+mist_strength = st.sidebar.slider("Mist Strength（雾化强度）", 0.0, 1.2, 0.6)
+mist_smoothness = st.sidebar.slider("Gradient Smoothness（渐变柔化）", 0.0, 1.0, 0.7)
+mist_glow = st.sidebar.slider("Glow Radius（光晕程度）", 0.0, 1.0, 0.4)
 
-    mood = "calm"
-    intensity = 0.4
+st.sidebar.header("🎨 Watercolor（水彩扩散）")
+wc_spread = st.sidebar.slider("Spread Radius（扩散范围）", 0.0, 1.0, 0.45)
+wc_layers = st.sidebar.slider("Layer Count（水彩层数）", 1, 5, 2)
+wc_saturation = st.sidebar.slider("Ink Saturation（墨色浓度）", 0.0, 1.0, 0.6)
 
-    # 强情绪关键词
-    sad_words = ["sad", "cry", "alone", "lonely", "lost", "empty", "寂寞", "失落", "难过"]
-    happy_words = ["happy", "joy", "excited", "smile", "满足", "开心", "快乐"]
-    romantic_words = ["romantic", "love", "kiss", "date", "牵手", "告白", "浪漫"]
-    nostalgic_words = ["nostalgic", "memory", "childhood", "old", "过去", "从前", "回忆"]
-    dreamy_words = ["dream", "dreamy", "fog", "mist", "night", "neon", "幻", "朦胧"]
-    tense_words = ["fight", "argue", "anxious", "压力", "紧张", "争吵"]
+st.sidebar.header("🩶 Pastel（粉彩柔化）")
+pastel_softness = st.sidebar.slider("Softness（柔和度）", 0.0, 1.0, 0.5)
+pastel_grain = st.sidebar.slider("Grain Amount（颗粒）", 0.0, 1.0, 0.25)
+pastel_blend = st.sidebar.slider("Blend Ratio（混合比例）", 0.0, 1.0, 0.6)
 
-    def contains_any(words):
-        return any(w in text for w in words)
+st.sidebar.header("💗 情绪影响（Emotion Link）")
+emotion_link = st.sidebar.slider("情绪对效果的影响强度", 0.0, 1.0, 0.7)
 
-    if contains_any(sad_words):
-        mood = "sad"
-        intensity = 0.7
-    elif contains_any(happy_words):
-        mood = "happy"
-        intensity = 0.6
-    elif contains_any(romantic_words):
-        mood = "romantic"
-        intensity = 0.55
-    elif contains_any(nostalgic_words):
-        mood = "nostalgic"
-        intensity = 0.6
-    elif contains_any(dreamy_words):
-        mood = "dreamy"
-        intensity = 0.65
-    elif contains_any(tense_words):
-        mood = "tense"
-        intensity = 0.7
+st.sidebar.header("🎲 随机种子 Seed")
+manual_seed = st.sidebar.number_input("Seed（可选，不改则自动随文本变化）", value=42, step=1)
+use_auto_seed = st.sidebar.checkbox("自动根据城市 + 文本生成种子", value=True)
+
+st.sidebar.write("----")
+generate_btn = st.sidebar.button("🎨 生成海报 Generate Poster")
+
+# ----------------------------
+# Step 2：本地情绪分析
+# ----------------------------
+st.subheader("Step 2 — 文本情绪与色彩分析结果")
+
+if generate_btn:
+    if not city.strip() or not memory_text.strip():
+        st.error("城市和记忆文本不能为空！")
+        st.stop()
+
+    analysis = analyze_memory_local(city, memory_text)
+    st.json(analysis)
+
+    # 自动 seed：基于 city + memory_text
+    if use_auto_seed:
+        seed = abs(hash(city.strip() + memory_text.strip())) % 10**6
     else:
-        # 没明显情绪词时，根据一些中性词判断
-        if any(w in text for w in ["rain", "fog", "mist", "雨", "雾"]):
-            mood = "nostalgic"
-            intensity = 0.55
-        elif any(w in text for w in ["sea", "ocean", "港口", "海边", "海"]):
-            mood = "calm"
-            intensity = 0.5
-        elif any(w in text for w in ["night", "灯光", "城市", "霓虹"]):
-            mood = "dreamy"
-            intensity = 0.6
+        seed = int(manual_seed)
 
-    # 情绪强度额外修正：文本越长、感叹号越多，强度越高一点
-    length_factor = min(len(memory) / 400.0, 1.0)  # 最多加到 1
-    exclam = memory.count("!") + memory.count("！")
-    intensity += 0.1 * length_factor + 0.05 * exclam
-    intensity = float(np.clip(intensity, 0.3, 0.85))
+    st.write("---")
 
-    palette = generate_palette(mood, intensity)
+    # ----------------------------
+    # Step 3：本地生成艺术海报
+    # ----------------------------
+    st.subheader("Step 3 — 本地生成艺术海报（完全离线）")
 
-    return {
-        "city": city,
-        "mood": mood,
-        "intensity": intensity,
-        "palette": palette,
-        "summary": f"在 {city} 的记忆呈现 {mood} 情绪基调，强度约为 {intensity:.2f}。",
-    }
+    with st.spinner("正在生成海报，请稍候..."):
+        poster_bytes = generate_poster(
+            city=city,
+            memory_text=memory_text,
+            mood=analysis["mood"],
+            palette=analysis["palette"],
+            mood_intensity=analysis["intensity"],
+            seed=seed,
+            emotion_link=emotion_link,
+            mist_strength=mist_strength,
+            mist_smoothness=mist_smoothness,
+            mist_glow=mist_glow,
+            wc_spread=wc_spread,
+            wc_layers=wc_layers,
+            wc_saturation=wc_saturation,
+            pastel_softness=pastel_softness,
+            pastel_grain=pastel_grain,
+            pastel_blend=pastel_blend,
+        )
+
+        st.image(poster_bytes, caption="🎨 海报生成结果", use_column_width=True)
+
+        st.download_button(
+            "📥 下载 PNG 文件",
+            data=poster_bytes,
+            file_name=f"{city}_art_poster.png",
+            mime="image/png"
+        )
