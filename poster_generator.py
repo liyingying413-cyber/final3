@@ -1,3 +1,4 @@
+import os
 import requests
 from io import BytesIO
 from PIL import Image
@@ -56,11 +57,11 @@ def _style_phrase_from_controls(controls: dict) -> str:
 def generate_poster_with_stable_diffusion(analysis: dict, controls: dict, seed: int = 42):
     """
     调用 Stability AI Stable Diffusion（sd3）生成 1:1 比例的小红书风情绪海报。
+    返回：(PIL.Image 或 None, 错误信息字符串 或 None)
     """
-    api_key = analysis.get("stability_key")
+    api_key = os.getenv("STABILITY_API_KEY")
     if not api_key:
-        print("No STABILITY_API_KEY found in analysis / environment.")
-        return None
+        return None, "环境变量 STABILITY_API_KEY 未设置。"
 
     mood = analysis.get("mood", "calm nostalgic")
     palette = analysis.get("palette", [])
@@ -72,7 +73,6 @@ def generate_poster_with_stable_diffusion(analysis: dict, controls: dict, seed: 
 
     # 情绪影响程度，控制一些额外描述
     mood_inf = controls.get("mood_influence", 0.5)
-    mood_phrase = ""
     if mood_inf > 0.7:
         mood_phrase = "emotion is strongly reflected in the shapes and colors"
     elif mood_inf > 0.3:
@@ -102,8 +102,8 @@ def generate_poster_with_stable_diffusion(analysis: dict, controls: dict, seed: 
     data = {
         "prompt": prompt,
         "output_format": "png",
-        "seed": str(seed),
-        # sd3 默认 1:1，足以满足海报展示需求
+        "aspect_ratio": "1:1",
+        "seed": seed,
         "negative_prompt": "text, letters, logo, watermark, frame, border",
     }
 
@@ -117,13 +117,16 @@ def generate_poster_with_stable_diffusion(analysis: dict, controls: dict, seed: 
         )
 
         if resp.status_code != 200:
-            print("Stable Diffusion error:", resp.status_code, resp.text)
-            return None
+            # 尝试解析错误信息
+            try:
+                err = resp.json()
+            except Exception:
+                err = resp.text
+            return None, f"HTTP {resp.status_code}: {err}"
 
         img_bytes = resp.content
         img = Image.open(BytesIO(img_bytes)).convert("RGB")
-        return img
+        return img, None
 
     except Exception as e:
-        print("Stable Diffusion exception:", e)
-        return None
+        return None, f"Exception when calling Stability API: {e}"
