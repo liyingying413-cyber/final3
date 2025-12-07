@@ -26,13 +26,53 @@ def _to_image_bytes(img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
+def _normalize_palette(palette) -> List[RGB]:
+    """
+    把各种奇怪格式的 palette 统一成 [(r,g,b), ...] 形式，避免 int 之类的错误。
+    支持：
+    - [(r,g,b), (r,g,b)...]
+    - [[r,g,b], [r,g,b]...]
+    - [r,g,b]
+    - numpy 数组
+    """
+    # numpy -> list
+    if isinstance(palette, np.ndarray):
+        palette = palette.tolist()
+
+    if not palette:
+        return [(200, 220, 230), (230, 240, 245), (180, 200, 210)]
+
+    # 如果是 [r,g,b] 这种扁平形式
+    if isinstance(palette[0], (int, float)):
+        if len(palette) >= 3:
+            r, g, b = palette[:3]
+            return [(int(r), int(g), int(b))]
+        else:
+            v = int(palette[0])
+            return [(v, v, v)]
+
+    # 正常 list[tuple/list]
+    norm: List[RGB] = []
+    for c in palette:
+        if isinstance(c, (list, tuple, np.ndarray)) and len(c) >= 3:
+            r, g, b = c[:3]
+            norm.append((int(r), int(g), int(b)))
+
+    if not norm:
+        norm = [(200, 220, 230), (230, 240, 245), (180, 200, 210)]
+
+    return norm
+
+
 # ---------------------------------------------------------
 # 生成基础渐变背景（使用 palette）
 # ---------------------------------------------------------
-def _generate_base_gradient(size: int, palette: List[RGB], mood_intensity: float) -> Image.Image:
+def _generate_base_gradient(size: int, palette, mood_intensity: float) -> Image.Image:
     """
     使用两到三种颜色生成一个柔和的对角线渐变背景。
     """
+    palette = _normalize_palette(palette)
+
     if len(palette) == 0:
         palette = [(200, 220, 230), (230, 240, 245), (180, 200, 210)]
     elif len(palette) == 1:
@@ -57,12 +97,15 @@ def _generate_base_gradient(size: int, palette: List[RGB], mood_intensity: float
             t_diag = (tx + ty) / 2.0
             c_diag = _lerp_color(c1, c2, t_diag)
             # 往中心靠近 c3
-            c_final = _lerp_color(c_diag, c3, (1.0 - d_center) * 0.8 * (0.4 + 0.6 * mood_intensity))
+            c_final = _lerp_color(
+                c_diag,
+                c3,
+                (1.0 - d_center) * 0.8 * (0.4 + 0.6 * mood_intensity),
+            )
 
             arr[y, x, :] = c_final
 
     img = Image.fromarray(arr, mode="RGB")
-    # 初始轻微模糊，让渐变更柔和
     img = img.filter(ImageFilter.GaussianBlur(radius=2.0))
     return img
 
@@ -80,29 +123,26 @@ def _apply_mist_layer(img: Image.Image, strength: float, smoothness: float, glow
     w, h = img.size
     base = img.convert("RGB")
 
-    # 雾感：创建一层接近白色的随机噪声，并进行高斯模糊后叠加
+    # 雾感
     if strength > 0:
         noise = np.random.rand(h, w).astype("float32")
-        # 平滑雾
         mist_radius = 20 + smoothness * 40
         mist_layer = Image.fromarray((noise * 255).astype("uint8"), mode="L")
         mist_layer = mist_layer.filter(ImageFilter.GaussianBlur(radius=mist_radius))
 
         mist_rgb = Image.merge("RGB", (mist_layer, mist_layer, mist_layer))
-        # 白色雾（亮部更强）
         white = Image.new("RGB", (w, h), (245, 245, 250))
         mist_rgb = Image.blend(white, mist_rgb, alpha=0.5)
 
-        # 根据强度与原图混合
         alpha = 0.25 + strength * 0.5
         base = Image.blend(base, mist_rgb, alpha=min(alpha, 0.95))
 
-    # Glow：对原图做一次模糊后再叠加
+    # Glow
     if glow > 0:
         glow_radius = 8 + glow * 25
         glow_layer = base.filter(ImageFilter.GaussianBlur(radius=glow_radius))
         glow_layer = Image.blend(base, glow_layer, alpha=0.6)
-        # 更亮一点
+
         enhancer = np.array(glow_layer).astype("float32")
         enhancer = enhancer * (1.05 + glow * 0.3)
         enhancer = np.clip(enhancer, 0, 255).astype("uint8")
@@ -118,7 +158,7 @@ def _apply_mist_layer(img: Image.Image, strength: float, smoothness: float, glow
 # ---------------------------------------------------------
 def _apply_watercolor_layer(
     img: Image.Image,
-    palette: List[RGB],
+    palette,
     spread: float,
     layers: int,
     saturation: float,
@@ -129,6 +169,7 @@ def _apply_watercolor_layer(
     if spread <= 0 or layers <= 0:
         return img
 
+    palette = _normalize_palette(palette)
     w, h = img.size
     base = img.convert("RGB")
 
@@ -136,11 +177,9 @@ def _apply_watercolor_layer(
         overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        # 每层画若干“水彩斑块”
         n_blobs = int(20 + spread * 40)
         for _ in range(n_blobs):
             color = random.choice(palette)
-            # 降低饱和度（偏粉彩）
             r, g, b = color
             r = int(r + (255 - r) * (0.6 * (1 - saturation)))
             g = int(g + (255 - g) * (0.6 * (1 - saturation)))
@@ -152,14 +191,13 @@ def _apply_watercolor_layer(
             rx = random.randint(int(max_radius * 0.2), max_radius)
             ry = random.randint(int(max_radius * 0.2), max_radius)
 
-            alpha = int(60 + 120 * random.random())  # 半透明
+            alpha = int(60 + 120 * random.random())
             bbox = (cx - rx, cy - ry, cx + rx, cy + ry)
             draw.ellipse(bbox, fill=(r, g, b, alpha))
 
         blur_radius = 10 + spread * 40
         overlay = overlay.filter(ImageFilter.GaussianBlur(radius=blur_radius))
 
-        # 混合到 base
         base = Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
     return base
@@ -180,20 +218,17 @@ def _apply_pastel_layer(
     base = img.convert("RGB")
     w, h = base.size
 
-    # 柔化：高斯模糊一次
     if softness > 0:
         blur_radius = 2 + softness * 8
         soft = base.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     else:
         soft = base
 
-    # 亮度稍微提升一点
     arr = np.array(soft).astype("float32")
     arr *= 1.05
     arr = np.clip(arr, 0, 255).astype("uint8")
     soft = Image.fromarray(arr, mode="RGB")
 
-    # 粒子：加一点高斯噪声
     if grain_amount > 0:
         noise = np.random.normal(0, grain_amount * 15, (h, w, 1)).astype("float32")
         arr = np.array(soft).astype("float32")
@@ -201,11 +236,9 @@ def _apply_pastel_layer(
         arr = np.clip(arr, 0, 255).astype("uint8")
         soft = Image.fromarray(arr, mode="RGB")
 
-    # 白色 / 粉彩覆盖，让整体更淡更柔
     overlay = Image.new("RGB", (w, h), (245, 245, 248))
     pastel = Image.blend(soft, overlay, alpha=0.25)
 
-    # 与原图按比例混合
     return Image.blend(img, pastel, alpha=blend_ratio)
 
 
@@ -232,8 +265,6 @@ def generate_poster(
     - 使用 A + C + E 三种风格：Mist + Watercolor + Pastel；
     - 返回 PNG 字节流，可直接给 Streamlit 显示与下载。
     """
-
-    # 固定随机种子，保证可复现
     try:
         seed_int = int(seed)
     except Exception:
@@ -242,39 +273,11 @@ def generate_poster(
     np.random.seed(seed_int)
     random.seed(seed_int)
 
-    # 画布大小（正方形海报）
     size = 1024
 
-    # 1. 基础渐变背景
     base = _generate_base_gradient(size=size, palette=palette, mood_intensity=mood_intensity)
 
-    # 2. Mist 柔雾
     base = _apply_mist_layer(
         img=base,
         strength=mist_strength,
-        smoothness=mist_smoothness,
-        glow=mist_glow,
-    )
-
-    # 3. Watercolor 水彩扩散
-    base = _apply_watercolor_layer(
-        img=base,
-        palette=palette,
-        spread=wc_spread,
-        layers=wc_layers,
-        saturation=wc_saturation,
-    )
-
-    # 4. Pastel 粉彩柔化 + 颗粒
-    base = _apply_pastel_layer(
-        img=base,
-        softness=pastel_softness,
-        grain_amount=pastel_grain,
-        blend_ratio=pastel_blend,
-    )
-
-    # 5. 最终轻微裁剪 & 调整（可选）
-    # 可以稍微缩小画面，留一点自然边界
-    final_img = base
-
-    return _to_image_bytes(final_img)
+        smooth
