@@ -1,92 +1,94 @@
-import os
-import json
-from openai import OpenAI
-
-API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=API_KEY) if API_KEY else None
+import numpy as np
 
 
-def analyze_with_openai(city: str, memory: str):
+def analyze_memory_local(city: str, memory_text: str):
     """
-    使用 OpenAI Responses API 分析情绪、色彩与风格。
-    如果没有 OPENAI_API_KEY，则返回 None，由前端使用 fallback。
+    本地情绪分析（无 API）
+    -------------------------------------
+    根据用户的文本自动推断情绪方向与色彩倾向，
+    返回颜色 palette、情绪标签、强度等。
     """
-    if client is None:
-        return None
 
-    instructions = (
-        "You are an art director for minimalist, pastel, dreamy posters. "
-        "Analyze the user's memory text about a city and output clean JSON "
-        "design parameters for an abstract emotional poster. "
-        "The poster style is similar to Xiaohongshu aesthetic: soft gradients, "
-        "pastel tones, dreamy blur, subtle film grain, plenty of whitespace."
-    )
+    text = (city + " " + memory_text).lower()
 
-    prompt = (
-        "Return ONLY valid JSON in this exact schema:\n"
-        "{\n"
-        '  \"title\": \"short poetic title\",\n'
-        '  \"subtitle\": \"1-2 short emotional lines\",\n'
-        '  \"mood\": \"2-3 word mood label\",\n'
-        '  \"intensity\": 0.0,\n'
-        '  \"palette\": [\"#AABBCC\", \"#112233\", \"#FFEEDD\"],\n'
-        '  \"style_mode\": \"misty_gradient|ocean_dream|warm_glow|night_neon\",\n'
-        '  \"typography_focus\": \"balanced|text_on_bottom|text_on_top\"\n'
-        "}\n\n"
-        f"City: {city}\n"
-        f"Memory: {memory}\n"
-    )
+    # -----------------------------
+    # 1）默认情绪
+    # -----------------------------
+    mood = "calm"
+    intensity = 0.5  # 0~1，用于海报中水彩 / 雾化的强弱
 
-    try:
-        resp = client.responses.create(
-            model="gpt-4.1-mini",
-            instructions=instructions,
-            input=prompt,
-        )
-        text = resp.output_text
-        data = json.loads(text)
-    except Exception as e:
-        print("OpenAI error:", e)
-        return None
+    # -----------------------------
+    # 2）情绪关键词判定
+    # -----------------------------
+    sad_words = ["sad", "lonely", "blue", "empty", "lost", "cold",
+                 "寂寞", "失落", "冷", "孤独", "忧郁"]
+    warm_words = ["warm", "love", "sun", "light", "summer", "sweet",
+                  "温暖", "明亮", "阳光", "喜欢", "治愈", "幸福"]
+    energetic_words = ["busy", "rush", "crowd", "energy", "fast", "noise",
+                       "热闹", "人群", "快速", "喧嚣", "活力"]
 
-    # 这里不再把 STABILITY_API_KEY 放进 JSON 里
-    return data
+    if any(w in text for w in sad_words):
+        mood = "melancholic"
+        intensity = 0.6
 
+    elif any(w in text for w in warm_words):
+        mood = "warm"
+        intensity = 0.5
 
-def local_analyze(city: str, memory: str):
-    """
-    当 OpenAI 不可用时的简易分析：
-    基于关键词推断情绪，并给出一组柔和色彩与风格。
-    """
-    text = (city + " " + memory).lower()
+    elif any(w in text for w in energetic_words):
+        mood = "energetic"
+        intensity = 0.7
 
-    mood = "calm nostalgic"
-    palette = ["#A9C8D8", "#E4EEF5", "#6FA3C8"]  # 柔和蓝绿
-    style_mode = "misty_gradient"
+    # -----------------------------
+    # 3）生成柔和风格 palette（适配 Mist + Watercolor + Pastel）
+    # -----------------------------
+    palette = generate_palette(mood)
 
-    if any(w in text for w in ["rain", "fog", "mist", "雾", "雨", "sad", "lonely", "寂寞"]):
-        mood = "melancholic soft"
-        palette = ["#7FA2C8", "#E7EDF5", "#405B88"]
-        style_mode = "misty_gradient"
-    elif any(w in text for w in ["sea", "ocean", "wave", "beach", "海"]):
-        mood = "ocean dream"
-        palette = ["#6EC3D6", "#E3F6FD", "#2C5B8A"]
-        style_mode = "ocean_dream"
-    elif any(w in text for w in ["summer", "sun", "阳光", "暖", "bright", "festival"]):
-        mood = "warm bright"
-        palette = ["#F9E8A5", "#FFBE88", "#7FD2C3"]
-        style_mode = "warm_glow"
-    elif any(w in text for w in ["night", "neon", "city lights", "夜", "霓虹"]):
-        mood = "night neon"
-        palette = ["#13002B", "#432371", "#F25F5C"]
-        style_mode = "night_neon"
-
+    # 输出结构
     return {
-        "title": f"{city} 的记忆",
-        "subtitle": "关于这座城市的情绪片段。",
+        "city": city,
         "mood": mood,
-        "intensity": 0.6,
+        "intensity": float(intensity),
         "palette": palette,
-        "style_mode": style_mode,
-        "typography_focus": "balanced",
+        "memory_excerpt": memory_text[:60] + "..." if len(memory_text) > 60 else memory_text,
     }
+
+
+# -------------------------------------------------
+# 色彩生成器：根据情绪生成柔和小红书风调色板
+# -------------------------------------------------
+
+def generate_palette(mood: str):
+    """
+    根据 mood 生成柔和风格的小红书配色。
+    每种情绪对应一个基础色，然后生成三色渐变。
+    """
+
+    # 基础色表（RGB）
+    base_colors = {
+        "calm":        np.array([150, 180, 210]),  # 冷静蓝
+        "melancholic": np.array([120, 140, 180]),  # 灰蓝紫
+        "warm":        np.array([255, 200, 160]),  # 暖橙粉
+        "energetic":   np.array([255, 130, 130]),  # 红粉
+    }
+
+    # 如果没找到，就默认 calm
+    base = base_colors.get(mood, base_colors["calm"]) / 255.0
+
+    # -----------------------------
+    # 生成三色渐变调色板
+    # -----------------------------
+    palette = []
+
+    for shift in [0.85, 1.0, 1.15]:
+        c = np.clip(base * shift, 0, 1)
+        hex_color = rgb_to_hex(c)
+        palette.append(hex_color)
+
+    return palette
+
+
+def rgb_to_hex(rgb):
+    """将 0~1 RGB 转为 #RRGGBB"""
+    r, g, b = (rgb * 255).astype(int)
+    return f"#{r:02X}{g:02X}{b:02X}"
